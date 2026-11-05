@@ -1,0 +1,77 @@
+{
+  "entities": {
+    "CatalogItem": {
+      "title": "CatalogItem",
+      "description": "A dulce, material, fruta, pastel, jugo, or desayuno item in the user's catalog.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Display name of the product",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "category": {
+          "type": "string",
+          "enum": ["dulce", "material", "fruta", "pastel", "jugo", "desayuno"],
+          "description": "Category of the product"
+        },
+        "unitPrice": {
+          "type": "number",
+          "description": "Unit price in COP"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the owner"
+        }
+      },
+      "required": ["name", "category", "unitPrice", "ownerId"]
+    },
+    "SavedGift": {
+      "title": "SavedGift",
+      "description": "A saved personalized gift quote with line items and labor cost.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Title or customer name for the gift",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Formatted creation date string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "items": {
+          "type": "array",
+          "description": "List of gift line items"
+        },
+        "laborCost": {
+          "type": "number",
+          "description": "Labor cost in COP"
+        },
+        "totalCost": {
+          "type": "number",
+          "description": "Total gift cost in COP"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the owner"
+        }
+      },
+      "required": ["title", "createdAt", "items", "laborCost", "totalCost", "ownerId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/catalog/{itemId}": {
+      "schema": { "$ref": "#/entities/CatalogItem" },
+      "description": "User's real-time synced catalog of dulces and materiales"
+    },
+    "/users/{userId}/savedGifts/{giftId}": {
+      "schema": { "$ref": "#/entities/SavedGift" },
+      "description": "User's real-time synced saved gift quotes"
+    }
+  }
+}

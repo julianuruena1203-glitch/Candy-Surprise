@@ -1,0 +1,6 @@
+{
+  "name": "Candy Surprise Cali - Armador de Regalos",
+  "description": "Calculadora y armador de regalos personalizados, anchetas y detalles con dulces, materiales y mano de obra.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
