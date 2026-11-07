@@ -31,7 +31,7 @@ service cloud.firestore {
         && data.keys().hasOnly(['name', 'category', 'unitPrice', 'ownerId'])
         && data.ownerId == userId
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
-        && data.category in ['dulce', 'material', 'fruta', 'pastel', 'jugo', 'desayuno']
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 60
         && data.unitPrice is number && data.unitPrice >= 0;
     }
 

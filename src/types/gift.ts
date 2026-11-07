@@ -1,10 +1,4 @@
-export type ItemCategory =
-  | 'dulce'
-  | 'material'
-  | 'fruta'
-  | 'pastel'
-  | 'jugo'
-  | 'desayuno';
+export type ItemCategory = string;
 
 export interface CatalogItem {
   id: string;

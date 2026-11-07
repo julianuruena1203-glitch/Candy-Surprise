@@ -33,6 +33,12 @@ import { auth, db, googleProvider, handleFirestoreError, OperationType } from '.
 import { CatalogItem, GiftLineItem, ItemCategory, SavedGift } from './types/gift';
 import { DEFAULT_CATALOG, LABOR_PRESETS, formatCOP } from './data/defaultCatalog';
 
+function formatCategory(cat: string): string {
+  if (!cat) return 'General';
+  const clean = cat.trim();
+  return clean.charAt(0).toUpperCase() + clean.slice(1);
+}
+
 const STORAGE_CATALOG_KEY = 'candy_surprise_catalog_v4';
 const STORAGE_SAVED_GIFTS_KEY = 'candy_surprise_saved_gifts_v1';
 
@@ -136,8 +142,12 @@ export default function App() {
 
   // Navigation & Filter state
   const [activeTab, setActiveTab] = useState<ActiveTab>('builder');
-  const [categoryFilter, setCategoryFilter] = useState<'all' | ItemCategory>('all');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Catalog tab specific search & filter state
+  const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
+  const [catalogCategoryFilter, setCatalogCategoryFilter] = useState<string>('all');
 
   // Current Gift Builder state
   const [giftTitle, setGiftTitle] = useState('');
@@ -152,38 +162,74 @@ export default function App() {
   const [showNewItemForm, setShowNewItemForm] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [newItemName, setNewItemName] = useState('');
-  const [newItemCategory, setNewItemCategory] = useState<ItemCategory>('dulce');
+  const [newItemCategory, setNewItemCategory] = useState<string>('Dulce');
   const [newItemPrice, setNewItemPrice] = useState('');
 
-  // Filtered catalog
+  // Unique categories dynamically derived from catalog + core defaults
+  const allCategories = useMemo(() => {
+    const defaults = ['Dulce', 'Material', 'Fruta', 'Pastel', 'Jugo', 'Desayuno'];
+    const map = new Map<string, string>();
+    defaults.forEach((d) => map.set(d.toLowerCase(), d));
+    catalog.forEach((item) => {
+      const raw = item.category?.trim();
+      if (raw) {
+        const lower = raw.toLowerCase();
+        if (!map.has(lower)) {
+          map.set(lower, formatCategory(raw));
+        }
+      }
+    });
+    return Array.from(map.values());
+  }, [catalog]);
+
+  // Filtered catalog for Gift Builder
   const filteredCatalog = useMemo(() => {
     return catalog.filter((item) => {
-      const matchesCategory = categoryFilter === 'all' || item.category === categoryFilter;
-      const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase().trim());
+      const itemCat = item.category?.trim().toLowerCase() || '';
+      const matchesCategory =
+        categoryFilter === 'all' || itemCat === categoryFilter.toLowerCase().trim();
+      const query = searchQuery.toLowerCase().trim();
+      const matchesSearch =
+        !query ||
+        item.name.toLowerCase().includes(query) ||
+        itemCat.includes(query);
       return matchesCategory && matchesSearch;
     });
   }, [catalog, categoryFilter, searchQuery]);
 
-  // Totals calculation
-  const { dulcesSubtotal, materialesSubtotal, grandTotal, totalItemsCount } = useMemo(() => {
-    let dulces = 0;
-    let materiales = 0;
+  // Filtered catalog for Catalog Management Tab
+  const filteredCatalogForManagement = useMemo(() => {
+    return catalog.filter((item) => {
+      const itemCat = item.category?.trim().toLowerCase() || '';
+      const matchesCategory =
+        catalogCategoryFilter === 'all' ||
+        itemCat === catalogCategoryFilter.toLowerCase().trim();
+      const query = catalogSearchQuery.toLowerCase().trim();
+      const matchesSearch =
+        !query ||
+        item.name.toLowerCase().includes(query) ||
+        itemCat.includes(query);
+      return matchesCategory && matchesSearch;
+    });
+  }, [catalog, catalogCategoryFilter, catalogSearchQuery]);
+
+  // Totals calculation with per-category subtotals
+  const { categorySubtotals, grandTotal, totalItemsCount } = useMemo(() => {
+    const subtotals: Record<string, number> = {};
+    let prodTotal = 0;
     let count = 0;
 
     for (const line of giftItems) {
       const lineTotal = line.item.unitPrice * line.quantity;
-      if (line.item.category === 'dulce') {
-        dulces += lineTotal;
-      } else {
-        materiales += lineTotal;
-      }
+      const cat = formatCategory(line.item.category || 'General');
+      subtotals[cat] = (subtotals[cat] || 0) + lineTotal;
+      prodTotal += lineTotal;
       count += line.quantity;
     }
 
     return {
-      dulcesSubtotal: dulces,
-      materialesSubtotal: materiales,
-      grandTotal: dulces + materiales + (Number(laborCost) || 0),
+      categorySubtotals: subtotals,
+      grandTotal: prodTotal + (Number(laborCost) || 0),
       totalItemsCount: count,
     };
   }, [giftItems, laborCost]);
@@ -300,8 +346,9 @@ export default function App() {
           `• ${l.quantity}x ${l.item.name}: ${formatCOP(l.item.unitPrice * l.quantity)}`
       ),
       `------------------------`,
-      `Dulces: ${formatCOP(dulcesSubtotal)}`,
-      `Materiales: ${formatCOP(materialesSubtotal)}`,
+      ...Object.entries(categorySubtotals).map(
+        ([cat, val]) => `Subtotal ${cat}: ${formatCOP(val)}`
+      ),
       `Mano de obra: ${formatCOP(laborCost)}`,
       `*TOTAL: ${formatCOP(grandTotal)}*`,
     ];
@@ -314,10 +361,12 @@ export default function App() {
   // Catalog management handlers
   const handleSaveCatalogItem = async (e: React.FormEvent) => {
     e.preventDefault();
-    const price = parseInt(newItemPrice.replace(/\D/g, ''), 10);
-    if (!newItemName.trim() || isNaN(price) || price < 0) return;
-
+    const cleanDigits = String(newItemPrice).replace(/\D/g, '');
+    const price = parseInt(cleanDigits, 10);
     const trimmedName = newItemName.trim();
+    const trimmedCategory = newItemCategory.trim() || 'General';
+
+    if (!trimmedName || isNaN(price) || price < 0) return;
 
     if (editingItemId) {
       if (user) {
@@ -325,7 +374,7 @@ export default function App() {
         try {
           await updateDoc(doc(db, path), {
             name: trimmedName,
-            category: newItemCategory,
+            category: trimmedCategory,
             unitPrice: price,
           });
         } catch (err) {
@@ -335,7 +384,7 @@ export default function App() {
         setCatalog((prev) =>
           prev.map((item) =>
             item.id === editingItemId
-              ? { ...item, name: trimmedName, category: newItemCategory, unitPrice: price }
+              ? { ...item, name: trimmedName, category: trimmedCategory, unitPrice: price }
               : item
           )
         );
@@ -349,7 +398,7 @@ export default function App() {
                 item: {
                   ...line.item,
                   name: trimmedName,
-                  category: newItemCategory,
+                  category: trimmedCategory,
                   unitPrice: price,
                 },
               }
@@ -363,7 +412,7 @@ export default function App() {
         try {
           await setDoc(doc(db, path), {
             name: trimmedName,
-            category: newItemCategory,
+            category: trimmedCategory,
             unitPrice: price,
             ownerId: user.uid,
           });
@@ -374,7 +423,7 @@ export default function App() {
         const created: CatalogItem = {
           id: newId,
           name: trimmedName,
-          category: newItemCategory,
+          category: trimmedCategory,
           unitPrice: price,
         };
         setCatalog((prev) => [created, ...prev]);
@@ -383,6 +432,7 @@ export default function App() {
 
     setNewItemName('');
     setNewItemPrice('');
+    setNewItemCategory('Dulce');
     setEditingItemId(null);
     setShowNewItemForm(false);
   };
@@ -390,7 +440,7 @@ export default function App() {
   const handleStartEditCatalogItem = (item: CatalogItem) => {
     setEditingItemId(item.id);
     setNewItemName(item.name);
-    setNewItemCategory(item.category);
+    setNewItemCategory(item.category || 'Dulce');
     setNewItemPrice(String(item.unitPrice));
     setShowNewItemForm(true);
   };
@@ -537,6 +587,7 @@ export default function App() {
                       setEditingItemId(null);
                       setNewItemName('');
                       setNewItemPrice('');
+                      setNewItemCategory('Dulce');
                       setShowNewItemForm((prev) => !prev);
                     }}
                     className="min-h-[48px] px-4 py-2 rounded-xl bg-blue-700 hover:bg-blue-800 text-white text-base font-bold flex items-center gap-2 transition-colors cursor-pointer"
@@ -552,9 +603,15 @@ export default function App() {
                     onSubmit={handleSaveCatalogItem}
                     className="bg-slate-100 border-2 border-slate-300 rounded-xl p-5 space-y-4"
                   >
-                    <h2 className="text-xl font-bold text-slate-900">
-                      {editingItemId ? 'Editar Producto' : 'Nuevo Dulce o Material'}
-                    </h2>
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-xl font-bold text-slate-900">
+                        {editingItemId ? 'Editar Producto' : 'Nuevo Producto'}
+                      </h2>
+                      <span className="text-sm font-semibold text-slate-600">
+                        Cualquier categoría y precio
+                      </span>
+                    </div>
+
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div className="sm:col-span-2">
                         <label className="block text-base font-bold text-slate-800 mb-1">
@@ -563,7 +620,7 @@ export default function App() {
                         <input
                           type="text"
                           required
-                          placeholder="Ej: Chocolatina Kinder"
+                          placeholder="Ej: Chocolatina Kinder, Peluche Oso, etc."
                           value={newItemName}
                           onChange={(e) => setNewItemName(e.target.value)}
                           className="w-full min-h-[50px] px-4 rounded-xl border-2 border-slate-400 bg-white text-lg font-medium text-slate-900"
@@ -574,69 +631,79 @@ export default function App() {
                           Precio ($)
                         </label>
                         <input
-                          type="number"
+                          type="text"
+                          inputMode="numeric"
                           required
-                          min="0"
-                          step="100"
                           placeholder="Ej: 5500"
                           value={newItemPrice}
                           onChange={(e) => setNewItemPrice(e.target.value)}
                           className="w-full min-h-[50px] px-4 rounded-xl border-2 border-slate-400 bg-white text-lg font-bold font-mono-tabular text-slate-900"
                         />
+                        {newItemPrice && !isNaN(parseInt(newItemPrice.replace(/\D/g, ''), 10)) && (
+                          <p className="text-sm font-bold text-emerald-700 mt-1">
+                            Valor: {formatCOP(parseInt(newItemPrice.replace(/\D/g, ''), 10))}
+                          </p>
+                        )}
                       </div>
                     </div>
-                    <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {(
-                          [
-                            { id: 'dulce', label: 'Dulce' },
-                            { id: 'material', label: 'Material' },
-                            { id: 'fruta', label: 'Fruta' },
-                            { id: 'pastel', label: 'Pastel' },
-                            { id: 'jugo', label: 'Jugo' },
-                            { id: 'desayuno', label: 'Desayuno' },
-                          ] as { id: ItemCategory; label: string }[]
-                        ).map((cat) => (
+
+                    {/* Free Category Input + Suggestion Chips */}
+                    <div className="space-y-2">
+                      <label className="block text-base font-bold text-slate-800">
+                        Categoría del producto (puedes escribir cualquier categoría)
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Escribe la categoría (ej: Dulce, Material, Peluche, Globo, Licor...)"
+                        value={newItemCategory}
+                        onChange={(e) => setNewItemCategory(e.target.value)}
+                        className="w-full min-h-[50px] px-4 rounded-xl border-2 border-slate-400 bg-white text-lg font-medium text-slate-900"
+                      />
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <span className="text-sm font-semibold text-slate-600">Sugerencias:</span>
+                        {allCategories.map((cat) => (
                           <button
-                            key={cat.id}
+                            key={cat}
                             type="button"
-                            onClick={() => setNewItemCategory(cat.id)}
-                            className={`min-h-[44px] px-4 rounded-xl text-base font-bold border-2 cursor-pointer ${
-                              newItemCategory === cat.id
+                            onClick={() => setNewItemCategory(cat)}
+                            className={`min-h-[38px] px-3.5 rounded-lg text-sm font-bold border-2 transition-colors cursor-pointer ${
+                              newItemCategory.toLowerCase().trim() === cat.toLowerCase().trim()
                                 ? 'bg-slate-900 text-white border-slate-900'
-                                : 'bg-white text-slate-800 border-slate-400'
+                                : 'bg-white text-slate-800 border-slate-300 hover:bg-slate-200'
                             }`}
                           >
-                            {cat.label}
+                            {cat}
                           </button>
                         ))}
                       </div>
-                      <div className="flex items-center gap-3">
-                        <button
-                          type="button"
-                          onClick={() => setShowNewItemForm(false)}
-                          className="min-h-[48px] px-5 rounded-xl border-2 border-slate-400 bg-white text-slate-800 text-lg font-bold cursor-pointer"
-                        >
-                          Cancelar
-                        </button>
-                        <button
-                          type="submit"
-                          className="min-h-[48px] px-6 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-lg font-bold cursor-pointer"
-                        >
-                          Guardar
-                        </button>
-                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowNewItemForm(false)}
+                        className="min-h-[48px] px-5 rounded-xl border-2 border-slate-400 bg-white text-slate-800 text-lg font-bold cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        className="min-h-[48px] px-6 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-lg font-bold cursor-pointer"
+                      >
+                        Guardar
+                      </button>
                     </div>
                   </form>
                 )}
 
-                {/* Search & Category Filter */}
+                {/* Search & Dynamic Category Filter */}
                 <div className="space-y-4">
                   <div className="relative">
                     <Search className="w-6 h-6 text-slate-500 absolute left-4 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
-                      placeholder="Buscar dulce o material..."
+                      placeholder="Buscar por nombre o categoría..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       className="w-full min-h-[54px] pl-12 pr-4 rounded-xl border-2 border-slate-300 bg-slate-50 focus:bg-white text-lg font-medium text-slate-900"
@@ -644,28 +711,29 @@ export default function App() {
                   </div>
 
                   <div className="flex flex-wrap gap-2.5">
-                    {(
-                      [
-                        { id: 'all', label: 'Todos' },
-                        { id: 'dulce', label: 'Dulces' },
-                        { id: 'material', label: 'Materiales' },
-                        { id: 'fruta', label: 'Frutas' },
-                        { id: 'pastel', label: 'Pastel' },
-                        { id: 'jugo', label: 'Jugos' },
-                        { id: 'desayuno', label: 'Desayuno' },
-                      ] as { id: 'all' | ItemCategory; label: string }[]
-                    ).map((tab) => (
+                    <button
+                      type="button"
+                      onClick={() => setCategoryFilter('all')}
+                      className={`min-h-[46px] px-5 rounded-xl text-base font-bold transition-colors cursor-pointer ${
+                        categoryFilter === 'all'
+                          ? 'bg-slate-900 text-white'
+                          : 'bg-slate-100 text-slate-800 hover:bg-slate-200'
+                      }`}
+                    >
+                      Todos ({catalog.length})
+                    </button>
+                    {allCategories.map((cat) => (
                       <button
-                        key={tab.id}
+                        key={cat}
                         type="button"
-                        onClick={() => setCategoryFilter(tab.id)}
-                        className={`min-h-[48px] px-5 rounded-xl text-base font-bold transition-colors cursor-pointer ${
-                          categoryFilter === tab.id
+                        onClick={() => setCategoryFilter(cat)}
+                        className={`min-h-[46px] px-4 rounded-xl text-base font-bold transition-colors cursor-pointer ${
+                          categoryFilter.toLowerCase().trim() === cat.toLowerCase().trim()
                             ? 'bg-slate-900 text-white'
                             : 'bg-slate-100 text-slate-800 hover:bg-slate-200'
                         }`}
                       >
-                        {tab.label}
+                        {cat}
                       </button>
                     ))}
                   </div>
@@ -696,7 +764,7 @@ export default function App() {
                         >
                           <div>
                             <span className="text-sm font-bold uppercase tracking-wide text-slate-500">
-                              {item.category === 'dulce' ? 'Dulce' : 'Material'}
+                              {formatCategory(item.category)}
                             </span>
                             <h3 className="text-xl font-extrabold text-slate-900 mt-0.5 leading-snug">
                               {item.name}
@@ -880,18 +948,23 @@ export default function App() {
 
               {/* Subtotals & Grand Total */}
               <div className="border-t-2 border-slate-200 pt-5 space-y-2.5 text-lg">
-                <div className="flex justify-between text-slate-700 font-semibold">
-                  <span>Subtotal Dulces:</span>
-                  <span className="font-mono-tabular font-bold text-slate-900">
-                    {formatCOP(dulcesSubtotal)}
-                  </span>
-                </div>
-                <div className="flex justify-between text-slate-700 font-semibold">
-                  <span>Subtotal Materiales:</span>
-                  <span className="font-mono-tabular font-bold text-slate-900">
-                    {formatCOP(materialesSubtotal)}
-                  </span>
-                </div>
+                {Object.keys(categorySubtotals).length === 0 ? (
+                  <div className="flex justify-between text-slate-500 font-medium">
+                    <span>Subtotal Productos:</span>
+                    <span className="font-mono-tabular font-bold text-slate-700">
+                      {formatCOP(0)}
+                    </span>
+                  </div>
+                ) : (
+                  Object.entries(categorySubtotals).map(([catName, val]) => (
+                    <div key={catName} className="flex justify-between text-slate-700 font-semibold">
+                      <span>Subtotal {catName}:</span>
+                      <span className="font-mono-tabular font-bold text-slate-900">
+                        {formatCOP(val)}
+                      </span>
+                    </div>
+                  ))
+                )}
                 <div className="flex justify-between text-slate-700 font-semibold">
                   <span>Mano de Obra:</span>
                   <span className="font-mono-tabular font-bold text-slate-900">
@@ -944,7 +1017,7 @@ export default function App() {
                   Catálogo de Dulces y Materiales
                 </h1>
                 <p className="text-lg text-slate-600">
-                  Aquí puedes agregar, editar o eliminar productos y sus precios.
+                  Aquí puedes buscar, agregar, editar o eliminar productos y sus precios.
                 </p>
               </div>
               <button
@@ -953,6 +1026,7 @@ export default function App() {
                   setEditingItemId(null);
                   setNewItemName('');
                   setNewItemPrice('');
+                  setNewItemCategory('Dulce');
                   setShowNewItemForm((prev) => !prev);
                 }}
                 className="min-h-[52px] px-5 rounded-xl bg-blue-700 hover:bg-blue-800 text-white text-lg font-bold flex items-center gap-2 cursor-pointer"
@@ -962,14 +1036,21 @@ export default function App() {
               </button>
             </div>
 
+            {/* Edit / New Product Form */}
             {showNewItemForm && (
               <form
                 onSubmit={handleSaveCatalogItem}
                 className="bg-slate-100 border-2 border-slate-300 rounded-xl p-5 space-y-4"
               >
-                <h2 className="text-xl font-bold text-slate-900">
-                  {editingItemId ? 'Editar Producto' : 'Nuevo Dulce o Material'}
-                </h2>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-xl font-bold text-slate-900">
+                    {editingItemId ? 'Editar Producto' : 'Nuevo Producto'}
+                  </h2>
+                  <span className="text-sm font-semibold text-slate-600">
+                    Cualquier categoría y precio
+                  </span>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div className="sm:col-span-2">
                     <label className="block text-base font-bold text-slate-800 mb-1">
@@ -978,6 +1059,7 @@ export default function App() {
                     <input
                       type="text"
                       required
+                      placeholder="Ej: Chocolatina Kinder, Peluche Oso, etc."
                       value={newItemName}
                       onChange={(e) => setNewItemName(e.target.value)}
                       className="w-full min-h-[50px] px-4 rounded-xl border-2 border-slate-400 bg-white text-lg font-medium text-slate-900"
@@ -988,98 +1070,197 @@ export default function App() {
                       Precio ($)
                     </label>
                     <input
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
                       required
-                      min="0"
-                      step="100"
+                      placeholder="Ej: 5500"
                       value={newItemPrice}
                       onChange={(e) => setNewItemPrice(e.target.value)}
                       className="w-full min-h-[50px] px-4 rounded-xl border-2 border-slate-400 bg-white text-lg font-bold font-mono-tabular text-slate-900"
                     />
+                    {newItemPrice && !isNaN(parseInt(newItemPrice.replace(/\D/g, ''), 10)) && (
+                      <p className="text-sm font-bold text-emerald-700 mt-1">
+                        Valor: {formatCOP(parseInt(newItemPrice.replace(/\D/g, ''), 10))}
+                      </p>
+                    )}
                   </div>
                 </div>
-                <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    {(
-                      [
-                        { id: 'dulce', label: 'Dulce' },
-                        { id: 'material', label: 'Material' },
-                        { id: 'fruta', label: 'Fruta' },
-                        { id: 'pastel', label: 'Pastel' },
-                        { id: 'jugo', label: 'Jugo' },
-                        { id: 'desayuno', label: 'Desayuno' },
-                      ] as { id: ItemCategory; label: string }[]
-                    ).map((cat) => (
+
+                {/* Free Category Input + Suggestion Chips */}
+                <div className="space-y-2">
+                  <label className="block text-base font-bold text-slate-800">
+                    Categoría del producto (puedes escribir cualquier categoría)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Escribe la categoría (ej: Dulce, Material, Peluche, Globo, Licor...)"
+                    value={newItemCategory}
+                    onChange={(e) => setNewItemCategory(e.target.value)}
+                    className="w-full min-h-[50px] px-4 rounded-xl border-2 border-slate-400 bg-white text-lg font-medium text-slate-900"
+                  />
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <span className="text-sm font-semibold text-slate-600">Sugerencias:</span>
+                    {allCategories.map((cat) => (
                       <button
-                        key={cat.id}
+                        key={cat}
                         type="button"
-                        onClick={() => setNewItemCategory(cat.id)}
-                        className={`min-h-[44px] px-4 rounded-xl text-base font-bold border-2 cursor-pointer ${
-                          newItemCategory === cat.id
+                        onClick={() => setNewItemCategory(cat)}
+                        className={`min-h-[38px] px-3.5 rounded-lg text-sm font-bold border-2 transition-colors cursor-pointer ${
+                          newItemCategory.toLowerCase().trim() === cat.toLowerCase().trim()
                             ? 'bg-slate-900 text-white border-slate-900'
-                            : 'bg-white text-slate-800 border-slate-400'
+                            : 'bg-white text-slate-800 border-slate-300 hover:bg-slate-200'
                         }`}
                       >
-                        {cat.label}
+                        {cat}
                       </button>
                     ))}
                   </div>
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setShowNewItemForm(false)}
-                      className="min-h-[48px] px-5 rounded-xl border-2 border-slate-400 bg-white text-slate-800 text-lg font-bold cursor-pointer"
-                    >
-                      Cancelar
-                    </button>
-                    <button
-                      type="submit"
-                      className="min-h-[48px] px-6 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-lg font-bold cursor-pointer"
-                    >
-                      Guardar
-                    </button>
-                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowNewItemForm(false)}
+                    className="min-h-[48px] px-5 rounded-xl border-2 border-slate-400 bg-white text-slate-800 text-lg font-bold cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="min-h-[48px] px-6 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-lg font-bold cursor-pointer"
+                  >
+                    Guardar
+                  </button>
                 </div>
               </form>
             )}
 
-            <div className="divide-y-2 divide-slate-200 border-2 border-slate-200 rounded-xl overflow-hidden">
-              {catalog.map((item) => (
-                <div
-                  key={item.id}
-                  className="p-4 sm:p-5 bg-white flex flex-wrap items-center justify-between gap-4"
-                >
-                  <div>
-                    <span className="text-sm font-bold uppercase text-slate-500">
-                      {item.category === 'dulce' ? 'Dulce' : 'Material'}
-                    </span>
-                    <h3 className="text-xl font-bold text-slate-900">{item.name}</h3>
-                  </div>
+            {/* Buscador de productos en el Catálogo */}
+            <div className="space-y-4 pt-2">
+              <div className="relative">
+                <Search className="w-6 h-6 text-slate-500 absolute left-4 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Buscar producto en el catálogo por nombre o categoría..."
+                  value={catalogSearchQuery}
+                  onChange={(e) => setCatalogSearchQuery(e.target.value)}
+                  className="w-full min-h-[54px] pl-12 pr-4 rounded-xl border-2 border-slate-300 bg-slate-50 focus:bg-white text-lg font-medium text-slate-900"
+                />
+              </div>
 
-                  <div className="flex items-center gap-4">
-                    <span className="text-2xl font-extrabold font-mono-tabular text-slate-900">
-                      {formatCOP(item.unitPrice)}
-                    </span>
+              {/* Filtros por Categoría en Catálogo */}
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setCatalogCategoryFilter('all')}
+                  className={`min-h-[46px] px-5 rounded-xl text-base font-bold transition-colors cursor-pointer ${
+                    catalogCategoryFilter === 'all'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-800 hover:bg-slate-200'
+                  }`}
+                >
+                  Todas ({catalog.length})
+                </button>
+                {allCategories.map((cat) => {
+                  const count = catalog.filter(
+                    (i) => i.category?.toLowerCase().trim() === cat.toLowerCase().trim()
+                  ).length;
+                  return (
                     <button
+                      key={cat}
                       type="button"
-                      onClick={() => handleStartEditCatalogItem(item)}
-                      className="min-h-[46px] px-4 rounded-xl border-2 border-slate-800 bg-white hover:bg-slate-100 text-slate-900 font-bold text-base flex items-center gap-1.5 cursor-pointer"
+                      onClick={() => setCatalogCategoryFilter(cat)}
+                      className={`min-h-[46px] px-4 rounded-xl text-base font-bold transition-colors cursor-pointer ${
+                        catalogCategoryFilter.toLowerCase().trim() === cat.toLowerCase().trim()
+                          ? 'bg-slate-900 text-white'
+                          : 'bg-slate-100 text-slate-800 hover:bg-slate-200'
+                      }`}
                     >
-                      <Pencil className="w-4 h-4" />
-                      <span>Editar</span>
+                      {cat} ({count})
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteCatalogItem(item.id)}
-                      className="min-h-[46px] px-4 rounded-xl border-2 border-rose-700 text-rose-700 hover:bg-rose-50 font-bold text-base flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      <span>Eliminar</span>
-                    </button>
-                  </div>
-                </div>
-              ))}
+                  );
+                })}
+              </div>
+
+              <div className="flex items-center justify-between text-base font-semibold text-slate-600 px-1">
+                <span>
+                  Mostrando {filteredCatalogForManagement.length} de {catalog.length} productos
+                </span>
+                {(catalogSearchQuery || catalogCategoryFilter !== 'all') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCatalogSearchQuery('');
+                      setCatalogCategoryFilter('all');
+                    }}
+                    className="text-blue-700 hover:underline font-bold cursor-pointer"
+                  >
+                    Limpiar filtros
+                  </button>
+                )}
+              </div>
             </div>
+
+            {/* Listado filtrado del Catálogo */}
+            {filteredCatalogForManagement.length === 0 ? (
+              <div className="text-center py-12 bg-slate-50 rounded-xl border-2 border-dashed border-slate-300 space-y-3">
+                <p className="text-xl font-bold text-slate-700">
+                  No se encontraron productos en el catálogo
+                </p>
+                <p className="text-base text-slate-600">
+                  No hay productos que coincidan con la búsqueda "{catalogSearchQuery}".
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCatalogSearchQuery('');
+                    setCatalogCategoryFilter('all');
+                  }}
+                  className="min-h-[46px] px-5 rounded-xl bg-slate-900 text-white font-bold text-base cursor-pointer"
+                >
+                  Ver todos los productos
+                </button>
+              </div>
+            ) : (
+              <div className="divide-y-2 divide-slate-200 border-2 border-slate-200 rounded-xl overflow-hidden">
+                {filteredCatalogForManagement.map((item) => (
+                  <div
+                    key={item.id}
+                    className="p-4 sm:p-5 bg-white flex flex-wrap items-center justify-between gap-4 hover:bg-slate-50/70 transition-colors"
+                  >
+                    <div>
+                      <span className="text-sm font-bold uppercase tracking-wide text-slate-500">
+                        {formatCategory(item.category)}
+                      </span>
+                      <h3 className="text-xl font-bold text-slate-900 mt-0.5">{item.name}</h3>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                      <span className="text-2xl font-extrabold font-mono-tabular text-slate-900">
+                        {formatCOP(item.unitPrice)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleStartEditCatalogItem(item)}
+                        className="min-h-[46px] px-4 rounded-xl border-2 border-slate-800 bg-white hover:bg-slate-100 text-slate-900 font-bold text-base flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Pencil className="w-4 h-4" />
+                        <span>Editar</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCatalogItem(item.id)}
+                        className="min-h-[46px] px-4 rounded-xl border-2 border-rose-700 text-rose-700 hover:bg-rose-50 font-bold text-base flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        <span>Eliminar</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
         )}
 

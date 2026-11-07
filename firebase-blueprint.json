@@ -13,8 +13,9 @@
         },
         "category": {
           "type": "string",
-          "enum": ["dulce", "material", "fruta", "pastel", "jugo", "desayuno"],
-          "description": "Category of the product"
+          "description": "Category of the product (e.g. dulce, material, fruta, pastel, etc.)",
+          "minLength": 1,
+          "maxLength": 60
         },
         "unitPrice": {
           "type": "number",
