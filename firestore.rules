@@ -18,27 +18,17 @@ service cloud.firestore {
       return resource.data;
     }
 
-    function isSignedIn() {
-      return request.auth != null && request.auth.token.email_verified == true;
-    }
-
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
-    }
-
-    function isValidCatalogItem(data, userId) {
-      return data.keys().hasAll(['name', 'category', 'unitPrice', 'ownerId'])
-        && data.keys().hasOnly(['name', 'category', 'unitPrice', 'ownerId'])
-        && data.ownerId == userId
+    function isValidCatalogItem(data) {
+      return data.keys().hasAll(['name', 'category', 'unitPrice'])
+        && data.keys().hasOnly(['name', 'category', 'unitPrice'])
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
         && data.category is string && data.category.size() >= 1 && data.category.size() <= 60
         && data.unitPrice is number && data.unitPrice >= 0;
     }
 
-    function isValidSavedGift(data, userId) {
-      return data.keys().hasAll(['title', 'createdAt', 'items', 'laborCost', 'totalCost', 'ownerId'])
-        && data.keys().hasOnly(['title', 'createdAt', 'items', 'laborCost', 'totalCost', 'ownerId'])
-        && data.ownerId == userId
+    function isValidSavedGift(data) {
+      return data.keys().hasAll(['title', 'createdAt', 'items', 'laborCost', 'totalCost'])
+        && data.keys().hasOnly(['title', 'createdAt', 'items', 'laborCost', 'totalCost'])
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 150
         && data.createdAt is string && data.createdAt.size() >= 1 && data.createdAt.size() <= 60
         && data.items is list && data.items.size() <= 200
@@ -46,26 +36,22 @@ service cloud.firestore {
         && data.totalCost is number && data.totalCost >= 0;
     }
 
-    match /users/{userId}/catalog/{itemId} {
-      allow list: if isOwner(userId);
-      allow get: if isOwner(userId) && isValidId(itemId);
-      allow create: if isOwner(userId) && isValidId(itemId) && isValidCatalogItem(incoming(), userId);
-      allow update: if isOwner(userId) && isValidId(itemId)
-        && isValidCatalogItem(incoming(), userId)
-        && incoming().ownerId == existing().ownerId
+    match /catalog/{itemId} {
+      allow list, get: if true;
+      allow create: if isValidId(itemId) && isValidCatalogItem(incoming());
+      allow update: if isValidId(itemId)
+        && isValidCatalogItem(incoming())
         && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'category', 'unitPrice']);
-      allow delete: if isOwner(userId) && isValidId(itemId);
+      allow delete: if isValidId(itemId);
     }
 
-    match /users/{userId}/savedGifts/{giftId} {
-      allow list: if isOwner(userId);
-      allow get: if isOwner(userId) && isValidId(giftId);
-      allow create: if isOwner(userId) && isValidId(giftId) && isValidSavedGift(incoming(), userId);
-      allow update: if isOwner(userId) && isValidId(giftId)
-        && isValidSavedGift(incoming(), userId)
-        && incoming().ownerId == existing().ownerId
+    match /savedGifts/{giftId} {
+      allow list, get: if true;
+      allow create: if isValidId(giftId) && isValidSavedGift(incoming());
+      allow update: if isValidId(giftId)
+        && isValidSavedGift(incoming())
         && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'items', 'laborCost', 'totalCost']);
-      allow delete: if isOwner(userId) && isValidId(giftId);
+      allow delete: if isValidId(giftId);
     }
   }
 }

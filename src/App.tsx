@@ -11,15 +11,7 @@ import {
   PackagePlus,
   RotateCcw,
   Pencil,
-  LogIn,
-  LogOut,
 } from 'lucide-react';
-import {
-  onAuthStateChanged,
-  signInWithPopup,
-  signOut,
-  User,
-} from 'firebase/auth';
 import {
   collection,
   doc,
@@ -29,7 +21,7 @@ import {
   deleteDoc,
   writeBatch,
 } from 'firebase/firestore';
-import { auth, db, googleProvider, handleFirestoreError, OperationType } from './firebase';
+import { db, handleFirestoreError, OperationType } from './firebase';
 import { CatalogItem, GiftLineItem, ItemCategory, SavedGift } from './types/gift';
 import { DEFAULT_CATALOG, LABOR_PRESETS, formatCOP } from './data/defaultCatalog';
 
@@ -45,38 +37,20 @@ const STORAGE_SAVED_GIFTS_KEY = 'candy_surprise_saved_gifts_v1';
 type ActiveTab = 'builder' | 'catalog' | 'saved';
 
 export default function App() {
-  // Firebase Auth state
-  const [user, setUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-
-  // Catalog state (synced with Firestore when signed in)
+  // Catalog state (synced live with shared Firestore)
   const [catalog, setCatalog] = useState<CatalogItem[]>(DEFAULT_CATALOG);
 
-  // Saved gifts state (synced with Firestore when signed in)
+  // Saved gifts state (synced live with shared Firestore)
   const [savedGifts, setSavedGifts] = useState<SavedGift[]>([]);
 
+  // Real-time Firestore sync for shared catalog & saved gifts
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      setAuthReady(true);
-    });
-    return () => unsub();
-  }, []);
-
-  // Real-time Firestore sync for catalog & savedGifts
-  useEffect(() => {
-    if (!authReady || !user) {
-      setCatalog(DEFAULT_CATALOG);
-      setSavedGifts([]);
-      return;
-    }
-
-    const catalogPath = `users/${user.uid}/catalog`;
+    const catalogPath = 'catalog';
     const unsubCatalog = onSnapshot(
       collection(db, catalogPath),
       async (snapshot) => {
         if (snapshot.empty) {
-          // Seed default catalog on first sign-in
+          // Seed default catalog on first initialization so all 182 items are live in Firestore
           try {
             const batch = writeBatch(db);
             DEFAULT_CATALOG.forEach((item) => {
@@ -85,7 +59,6 @@ export default function App() {
                 name: item.name,
                 category: item.category,
                 unitPrice: item.unitPrice,
-                ownerId: user.uid,
               });
             });
             await batch.commit();
@@ -100,7 +73,7 @@ export default function App() {
           return {
             id: d.id,
             name: String(data.name || ''),
-            category: (data.category as ItemCategory) || 'dulce',
+            category: String(data.category || 'General'),
             unitPrice: Number(data.unitPrice) || 0,
           };
         });
@@ -112,7 +85,7 @@ export default function App() {
       }
     );
 
-    const giftsPath = `users/${user.uid}/savedGifts`;
+    const giftsPath = 'savedGifts';
     const unsubGifts = onSnapshot(
       collection(db, giftsPath),
       (snapshot) => {
@@ -138,7 +111,7 @@ export default function App() {
       unsubCatalog();
       unsubGifts();
     };
-  }, [authReady, user]);
+  }, []);
 
   // Navigation & Filter state
   const [activeTab, setActiveTab] = useState<ActiveTab>('builder');
@@ -272,7 +245,7 @@ export default function App() {
     setLaborCost(15000);
   };
 
-  // Save gift quote
+  // Save gift quote to shared Firestore
   const handleSaveGift = async () => {
     if (giftItems.length === 0 && laborCost === 0) return;
 
@@ -292,22 +265,17 @@ export default function App() {
       totalCost: grandTotal,
     };
 
-    if (user) {
-      const path = `users/${user.uid}/savedGifts/${giftId}`;
-      try {
-        await setDoc(doc(db, path), {
-          title: newSaved.title,
-          createdAt: newSaved.createdAt,
-          items: newSaved.items,
-          laborCost: newSaved.laborCost,
-          totalCost: newSaved.totalCost,
-          ownerId: user.uid,
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, path);
-      }
-    } else {
-      setSavedGifts((prev) => [newSaved, ...prev]);
+    const path = `savedGifts/${giftId}`;
+    try {
+      await setDoc(doc(db, 'savedGifts', giftId), {
+        title: newSaved.title,
+        createdAt: newSaved.createdAt,
+        items: newSaved.items,
+        laborCost: newSaved.laborCost,
+        totalCost: newSaved.totalCost,
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, path);
     }
 
     setSavedNotice(true);
@@ -322,15 +290,11 @@ export default function App() {
   };
 
   const handleDeleteSavedGift = async (id: string) => {
-    if (user) {
-      const path = `users/${user.uid}/savedGifts/${id}`;
-      try {
-        await deleteDoc(doc(db, path));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, path);
-      }
-    } else {
-      setSavedGifts((prev) => prev.filter((g) => g.id !== id));
+    const path = `savedGifts/${id}`;
+    try {
+      await deleteDoc(doc(db, 'savedGifts', id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, path);
     }
   };
 
@@ -358,7 +322,7 @@ export default function App() {
     setTimeout(() => setCopiedSummary(false), 2500);
   };
 
-  // Catalog management handlers
+  // Catalog management handlers (shared real-time Firestore)
   const handleSaveCatalogItem = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanDigits = String(newItemPrice).replace(/\D/g, '');
@@ -369,25 +333,15 @@ export default function App() {
     if (!trimmedName || isNaN(price) || price < 0) return;
 
     if (editingItemId) {
-      if (user) {
-        const path = `users/${user.uid}/catalog/${editingItemId}`;
-        try {
-          await updateDoc(doc(db, path), {
-            name: trimmedName,
-            category: trimmedCategory,
-            unitPrice: price,
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, path);
-        }
-      } else {
-        setCatalog((prev) =>
-          prev.map((item) =>
-            item.id === editingItemId
-              ? { ...item, name: trimmedName, category: trimmedCategory, unitPrice: price }
-              : item
-          )
-        );
+      const path = `catalog/${editingItemId}`;
+      try {
+        await updateDoc(doc(db, 'catalog', editingItemId), {
+          name: trimmedName,
+          category: trimmedCategory,
+          unitPrice: price,
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, path);
       }
 
       setGiftItems((prev) =>
@@ -407,26 +361,15 @@ export default function App() {
       );
     } else {
       const newId = `custom-${Date.now()}`;
-      if (user) {
-        const path = `users/${user.uid}/catalog/${newId}`;
-        try {
-          await setDoc(doc(db, path), {
-            name: trimmedName,
-            category: trimmedCategory,
-            unitPrice: price,
-            ownerId: user.uid,
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.CREATE, path);
-        }
-      } else {
-        const created: CatalogItem = {
-          id: newId,
+      const path = `catalog/${newId}`;
+      try {
+        await setDoc(doc(db, 'catalog', newId), {
           name: trimmedName,
           category: trimmedCategory,
           unitPrice: price,
-        };
-        setCatalog((prev) => [created, ...prev]);
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, path);
       }
     }
 
@@ -446,31 +389,11 @@ export default function App() {
   };
 
   const handleDeleteCatalogItem = async (id: string) => {
-    if (user) {
-      const path = `users/${user.uid}/catalog/${id}`;
-      try {
-        await deleteDoc(doc(db, path));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, path);
-      }
-    } else {
-      setCatalog((prev) => prev.filter((item) => item.id !== id));
-    }
-  };
-
-  const handleGoogleSignIn = async () => {
+    const path = `catalog/${id}`;
     try {
-      await signInWithPopup(auth, googleProvider);
+      await deleteDoc(doc(db, 'catalog', id));
     } catch (err) {
-      console.error('Error al iniciar sesión con Google:', err);
-    }
-  };
-
-  const handleSignOut = async () => {
-    try {
-      await signOut(auth);
-    } catch (err) {
-      console.error('Error al cerrar sesión:', err);
+      handleFirestoreError(err, OperationType.DELETE, path);
     }
   };
 
@@ -536,28 +459,8 @@ export default function App() {
             </button>
           </nav>
 
-          {/* Zone 3: Primary Action & Google Sync */}
+          {/* Zone 3: Primary Action */}
           <div className="flex items-center gap-3 shrink-0">
-            {user ? (
-              <button
-                type="button"
-                onClick={handleSignOut}
-                title={`Conectado como ${user.email}`}
-                className="min-h-[50px] px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-base font-bold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <LogOut className="w-5 h-5" />
-                <span>{user.email?.split('@')[0]}</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleGoogleSignIn}
-                className="min-h-[50px] px-4 py-2.5 rounded-xl bg-blue-700 hover:bg-blue-800 text-white text-base font-bold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <LogIn className="w-5 h-5" />
-                <span>Conectar Gmail</span>
-              </button>
-            )}
             <button
               type="button"
               onClick={handleResetGift}

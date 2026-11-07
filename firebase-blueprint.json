@@ -2,7 +2,7 @@
   "entities": {
     "CatalogItem": {
       "title": "CatalogItem",
-      "description": "A dulce, material, fruta, pastel, jugo, or desayuno item in the user's catalog.",
+      "description": "A dulce, material, fruta, pastel, jugo, desayuno, or custom item in the shared catalog.",
       "type": "object",
       "properties": {
         "name": {
@@ -13,20 +13,16 @@
         },
         "category": {
           "type": "string",
-          "description": "Category of the product (e.g. dulce, material, fruta, pastel, etc.)",
+          "description": "Category of the product",
           "minLength": 1,
           "maxLength": 60
         },
         "unitPrice": {
           "type": "number",
           "description": "Unit price in COP"
-        },
-        "ownerId": {
-          "type": "string",
-          "description": "UID of the owner"
         }
       },
-      "required": ["name", "category", "unitPrice", "ownerId"]
+      "required": ["name", "category", "unitPrice"]
     },
     "SavedGift": {
       "title": "SavedGift",
@@ -56,23 +52,19 @@
         "totalCost": {
           "type": "number",
           "description": "Total gift cost in COP"
-        },
-        "ownerId": {
-          "type": "string",
-          "description": "UID of the owner"
         }
       },
-      "required": ["title", "createdAt", "items", "laborCost", "totalCost", "ownerId"]
+      "required": ["title", "createdAt", "items", "laborCost", "totalCost"]
     }
   },
   "firestore": {
-    "/users/{userId}/catalog/{itemId}": {
+    "/catalog/{itemId}": {
       "schema": { "$ref": "#/entities/CatalogItem" },
-      "description": "User's real-time synced catalog of dulces and materiales"
+      "description": "Shared real-time catalog of products accessible from any device via link"
     },
-    "/users/{userId}/savedGifts/{giftId}": {
+    "/savedGifts/{giftId}": {
       "schema": { "$ref": "#/entities/SavedGift" },
-      "description": "User's real-time synced saved gift quotes"
+      "description": "Shared real-time saved gifts accessible from any device via link"
     }
   }
 }
